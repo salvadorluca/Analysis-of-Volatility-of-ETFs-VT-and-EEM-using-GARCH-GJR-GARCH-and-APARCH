@@ -1,0 +1,1839 @@
+---
+title: "Volatility Prediction"
+author: "Luca Salvador"
+date: "2023-05-05"
+output: pdf_document
+---
+```{css, echo=FALSE}
+h1, h4 {
+  text-align: center;
+}
+```
+```{r setup, include=FALSE}
+remove(list=ls())
+knitr::knit_hooks$set(purl = knitr::hook_purl)
+library("readxl")
+library("fUnitRoots")
+library("astsa")
+library("tidyverse")
+library("fImport")
+library("fBasics")
+library("rugarch")
+library("highfrequency")
+library("xts")
+library("zoo")
+library("stats")
+library("chron")
+library("forecast")
+library("quantmod")
+library("astsa")
+library("readxl")
+library("tidyverse")
+library("timeSeries")
+library("fImport")
+library("fBasics")
+library("rugarch")
+library("aTSA")
+library("stats")
+library(sandwich)
+library(dplyr)
+library(tidyr)
+library(PortfolioAnalytics)
+library(DEoptim)
+library(ROI)
+require(ROI.plugin.quadprog)
+require(ROI.plugin.glpk)
+```
+
+# Table of Contents
+
+1. [Brief Introduction to the Loaded Financial Instruments](#introduction)
+2. [Data Loading](#loading)
+3. [VT](#VT)
+   1. [Graphical Representation and Stylized Facts](#plotsVT)
+   2. [GARCH(1,1) with Normal Distribution](#garchVT)
+   3. [GARCH, GJR-GARCH, APARCH with Normal and Asymmetric t-Distributions](#3specVT)
+   4. [One-Step Ahead Forecasts and DM Test](#previVT)
+4. [EEM](#EEM)
+   1. [Graphical Representation and Stylized Facts](#plotsEEM)
+   2. [GARCH(1,1) with Normal Distribution](#garchEEM)
+   3. [GARCH, GJR-GARCH, APARCH with Normal and Asymmetric t-Distributions](#3specEEM)
+   4. [One-Step Ahead Forecasts and DM Test](#previEEM)
+5. [Correlations Among Standardized Residuals](#correlations)
+
+\newpage
+## 1. Brief introduction to the loaded financial instruments {#introduction}
+## [VT](https://investor.vanguard.com/investment-products/etfs/profile/vt#)
+Vanguard Total World Stock ETF (VT) aims to track the performance of an index that measures the investment returns of companies located in developed and emerging markets worldwide.
+
+The Fund employs an indexed investment approach aimed at tracking the performance of the FTSE Global All Cap Index, a market-capitalization-weighted index adjusted for free float, designed to measure the market performance of large, medium, and small capitalization companies located around the world.
+
+The Fund seeks to sample the target index by investing all, or substantially all, of its assets in common stocks of the Index and holding a representative sample of securities that resembles the entire Index in terms of key risk factors and other characteristics. These factors include sector weightings, country weightings, market capitalization, and other financial characteristics of the securities.
+\newpage
+
+## [EEM](https://www.ishares.com/us/products/239637/ishares-msci-emerging-markets-etf#/)
+The iShares MSCI Emerging Markets ETF aims to track the investment results of an index composed of large and medium capitalization emerging markets.
+
+The Fund aims to track the results of the MSCI Emerging Markets Index (the "Underlying Index"), which is designed to measure the stock market performance of the global emerging markets.
+As of August 31, 2022, the Underlying Index was composed of securities from the following 24 emerging market countries: Brazil, Chile, China, Colombia, Czech Republic, Egypt, Greece, India, Indonesia, Hungary, Kuwait, Malaysia, Mexico, Peru, Philippines, Poland, Qatar, Saudi Arabia, South Africa, South Korea, Taiwan, Thailand, Turkey, and the United Arab Emirates.
+
+The Underlying Index includes large and medium capitalization companies and may change over time. As of August 31, 2022, a significant portion of the Benchmark Index is represented by securities of companies in the financial and technology sectors. The components of the Underlying Index may change over time. BlackRock Fund Advisors uses a "passive" or indexing approach to try to achieve the Fund's investment objective. Unlike many investment companies, the Fund does not seek to "beat" the index it follows and does not seek temporary defensive positions when markets appear overvalued. Indexing may eliminate the possibility that the Fund substantially outperforms the Underlying Index, but can also reduce some of the risks of active management, such as poor stock selection.
+
+\newpage
+
+# 2. Data loading {#loading}
+```{r}
+getSymbols('VT', from='2008-06-26', to='2023-03-31',warnings=FALSE, 
+           auto.assign=TRUE,  periodicity='daily')
+VTd = `VT` $ `VT.Adjusted`
+VTd = na.omit(VTd)
+
+getSymbols('EEM', from='2003-04-14', to='2023-03-31',warnings=FALSE, 
+           auto.assign=TRUE,  periodicity='daily')
+EEMd = `EEM` $ `EEM.Adjusted`
+EEMd = na.omit(EEMd)
+```
+\newpage
+
+# 3. VT {#VT}
+
+## 3.1 "Graphically represent the returns and briefly describe the stylized facts that characterize them, highlighting any differences between the financial instruments considered. Use the statistical tools you deem most appropriate for these analyses, necessarily including the verification of the possible presence of heteroscedasticity."{#plotsVT}
+
+```{r,fig.align='center'}
+par(mfrow=c(2,3))
+plot(VTd, main='VT - DAILY PRICES')
+plot(log(VTd), main='VT - DAILY LOG PRICES')
+plot(diff(log(VTd)), main='VT - DAILY LOG RETURN')
+acf(VTd, lag=50)
+acf(log(VTd), lag=50)
+acf(na.omit(diff(log(VTd))), lag=50)
+```
+In the figure just before this, graphical analyses of the series are provided (from left to right: daily prices, daily log-prices, and log-returns) along with their corresponding correlograms.
+A strong bullish trend in the VT ETF can be identified within the time interval considered.
+One can also notice a volatility clustering behavior (more clearly observable in the series of log-returns), where periods of high volatility are followed by periods of low volatility.
+Regarding the global autocorrelations (ACF), as per theory, the hypotheses of a clear evidence of non-stationarity of the stochastic process are confirmed; while, in log-returns, although there are some statistically significant values (due to the large series size), these can be considered almost irrelevant from an economic perspective.
+In doing so, an uncorrelation of data that is at least economically non-significant is verified; however, this is not confirmed by the Ljung-Box test.
+The Ljung-Box test indeed checks for data uncorrelation, and with a low p-value, we reject the null hypothesis of uncorrelation and conclude that at least statistically, there is a form of serial dependence in the log returns.
+
+```{r,warning=FALSE}
+dlvts = na.omit(diff(log(VTd)))
+outB = Box.test(dlvts,1:20)
+round(outB$p.value, 5)
+```
+
+\newpage
+### Analysis of deviation from normality
+
+```{r}
+par(mfrow=c(2,3))
+dlvts = na.omit(diff(log(VTd)))
+plot(density(dlvts), main='VTd- DAILY RETURNS DENSITY')
+qqnorm(dlvts,main="Normal Q-Q Plot",xlab="Theoretical Quantiles",ylab="Sample Quantiles")
+qqline(dlvts,col="steelblue",lwd=2)
+acf(dlvts,20,main='')
+dlvts2=(dlvts)^2
+plot(dlvts2, main='VTd - SQUARED LOG.RET')
+acf(dlvts2, 20)
+pacf(dlvts2, 20)      
+```
+
+In this case, the figure represents some typical characteristics of a financial instrument that should be analyzed individually: the empirical hypothesis of non-normality of the historical series is at least graphically confirmed, particularly due to strong kurtosis visible in the top left chart, which shows very thick tails, and deviation from normality on the tails also visible in the qq-plot.
+The skewness, which is another empirical characteristic, for an ETF like VT that contains many companies inside, seems to approach nullity.
+In the second group of figures, at the bottom, a proxy for the variance (i.e., the series of squared returns) is analyzed: it is also observable in this case that the levels of variability (on which subsequently models that can estimate it will be built) are not always constant and suggest rather a sort of serial dependence, confirmed quite clearly by the ACF of the squared returns.
+
+\newpage
+### Testing for the presence of unit roots
+```{r}
+out1 = adfTest(log(VTd), lag=21, type='c')
+summary(out1@test$lm)
+```
+
+By removing one lag at a time and assessing the significance of the coefficient associated with the last delay in the linear regression model constructed during the Augmented Dickey-Fuller (ADF) test for the stationarity of a time series, it was found that the appropriate number of lags to use is 20, and the intercept is not significant.
+
+```{r}
+out1 = adfTest(log(VTd), lag=20, type='nc')
+summary(out1@test$lm)
+```
+```{r,include=FALSE}
+#important because the number of lags considered in an ADF (Augmented Dickey-Fuller test) represents the amount of lagging of the error term that is included in the model. In practice, each additional delay corresponds to a greater consideration of the past variations of the historical series in the statistical model used for the test.
+```
+
+The command is then executed without saving the output:
+
+
+```{r}
+adfTest(log(VTd), lags=20, type='nc')
+```
+
+As expected, the null hypothesis of non-stationarity is not rejected.
+
+To complete this assessment, it is necessary to proceed with a further test on the first difference, to verify that there is only one unit root within the model. If this is not the case, it would imply violations of the market efficiency hypothesis.
+
+By removing one lag at a time and evaluating the significance of the coefficient associated with the last delay in the linear regression model constructed during the ADF test for the stationarity of a time series, it was found that the lags to use are 19, and the intercept is not significant.
+
+```{r,warning=FALSE}
+out1 = adfTest(dlvts, lag=19, type='nc')
+summary(out1@test$lm)
+adfTest(dlvts, lags=19, type='nc')
+```
+
+As expected, the null hypothesis regarding the presence of an additional unit root is rejected.
+
+\newpage
+### The objective of the analysis is to verify whether heteroscedasticity is present or not, and if it is significant enough to warrant the application of a model subsequently.
+
+Below, the log-prices are calculated with a window up to March 31, 2022, and the log percentage returns are computed.
+
+```{r}
+p_VT = log(window(VTd, end="2022-03-31")) #log-prices
+p_VT = as.vector(p_VT$VT.Adjusted[,1])
+T = length(p_VT)
+r_VT=100*(p_VT[2:T]-p_VT[1:T-1]) #log returns &
+par(mfrow=c(1,1))
+tsplot(r_VT, ylab='VT') # plot log returns %
+```
+
+As previously noted, there is a volatility clustering effect, with phases of high volatility followed by periods of stability.
+
+The Autocorrelation Functions (ACF) on returns, absolute values, and squares are analyzed below. There is serial dependence on absolute values and their squares. On returns, however, little is evident; the confidence bands are very narrow due to the sample dependence (with 3466 observations, they are indeed very small).
+
+Focusing on absolute values and squares, a strong serial correlation is evident, even up to 40 lags, indicating significant persistence. This behavior is typically common in financial instruments that exhibit certain characteristics, while on the other hand, with securities that fluctuate widely or are illiquid, we might find little serial correlation.
+
+```{r}
+par(mfrow=c(1,3))
+acf(r_VT,lag.max=40,xlab="",ylab="",main="VT ret")
+acf(abs(r_VT),lag.max=40,xlab="",ylab="",main="VT abs")
+acf(abs(r_VT)^2,lag.max=40,xlab="",ylab="",main="vt sqr")
+```
+
+One of the first methods to assess heteroscedasticity and understand how it translates into variances is the rolling variance. Using 62 observations, we have a window of approximately one quarter, while with 126 observations, the window extends to a semester.
+
+```{r,warning=FALSE}
+par(mfrow=c(1,1))
+rollV=rollStats(as.timeSeries(r_VT),62,FUN=var)
+tsplot(rollV,ylab="",xlab="")
+rollV=rollStats(as.timeSeries(r_VT),126,FUN=var)
+tsplot(rollV,ylab="",xlab="")
+```
+
+As expected, the historical series is characterized by heteroscedasticity; smoother trends can be observed on the graph with 126 observations due to the fact that adding one observation changes less than 1% of the sample.
+
+#### We also accompany the analysis with statistical tests:
+
+Ljung-Box Test and ARCH Test
+
+We expect to reject the null hypothesis, thus rejecting the idea that all autocorrelation functions are null up to a delay of 5 or 10.
+
+The test statistic is a chi-square, with degrees of freedom depending on the delays considered.
+
+#### Ljung-Box Test at lags 5 and 10
+```{r}
+y2 = (r_VT - mean(r_VT))^2 #returns in deviation from mean,squared
+Box.test(y2, lag = 5, type = "Ljung-Box")
+Box.test(y2, lag = 10, type = "Ljung-Box")
+```
+
+Following the results from the Ljung-Box test, where a low p-value led to the rejection of the null hypothesis of non-correlation, we now proceed with the LM-ARCH test.
+
+#### Test LM-ARCH
+
+This test involves conducting an auxiliary regression to evaluate the null hypothesis of homoscedasticity against the alternative hypothesis of heteroscedasticity. If the test statistic exceeds a certain critical threshold, the null hypothesis of no heteroscedasticity is rejected in favor of the alternative hypothesis indicating the presence of heteroscedasticity.
+
+The code below considers 1, 2, and 3 lags for the test:
+
+```{r}
+# consider 1, 2, and 3 lags for the LM test
+y2=as.timeSeries(y2)
+y2L1 <- lag(y2,1)
+y2L2 <- lag(y2,2)
+y2L3 <- lag(y2,3)
+# three test statistics and corresponding P-values
+# 
+# First lag:
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+# using T-2 because some observations are lost in lags 1,2,3 and to compare I choose 2
+pchisq(LMARCH1,1,lower.tail=FALSE) # test only on the upper tail
+# Second lag:
+out2 <- lm(y2 ~ y2L1 + y2L2)
+sum2 <- summary(out2)
+LMARCH2 <- sum2$r.squared*(T-2)
+pchisq(LMARCH2,2,lower.tail=FALSE)
+# Third lag:
+out3 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum3 <- summary(out3)
+LMARCH3 <- sum3$r.squared*(T-2)
+pchisq(LMARCH3,3,lower.tail=FALSE)
+```
+
+Given the rejection of the null hypothesis in all three ARCH tests, we conclude that there is heteroscedasticity present in the historical series considered.
+
+\newpage
+## 3.2 "Fit a GARCH(1,1) model with normal distribution to the yields. The sample you use for estimation should run until the end of March 2022, thus leaving one year for later analysis. Comment on the differences in the fit to the data in the two stocks considered, assessing the presence of heteroschedasticity in the standardised residuals, the presence of skewness, and the consistency of the choice of distribution for innovations."{#garchVT}
+
+### GARCH(1,1) Model
+
+We now aim to fit a GARCH(1,1) model capable of capturing the heteroscedasticity present in the historical series.
+
+The GARCH(1,1) model posits that the volatility of a financial asset depends partly on the volatility from the previous time interval and a shock term.
+Specifically, the formula for conditional volatility at time t is:
+
+\[ \sigma_t^2 = \omega + \alpha \cdot r_{t-1}^2 + \beta \cdot \sigma_{t-1}^2 \]
+
+where \(\sigma_t^2\) is the conditional volatility at time t, \(\omega\) represents the baseline level of volatility, \(\alpha\) is the weight of the square of the residual at time t-1, and \(\beta\) is the weight of the conditional volatility at time t-1.
+
+Model specification:
+
+```{r}
+par(mfrow=c(1,1))
+tsplot(r_VT, ylab='VT') # plot of log percentage returns
+spec0 <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+# estimate model saving output
+fit0 <- ugarchfit(spec0, r_VT)
+# estimate model with output on screen
+fit0@fit$robust.matcoef
+```
+
+Observing the p-values calculated with the quasi-maximum likelihood method, it is noted that all parameters are statistically significant.
+
+The beta parameter assumes a value of 0.83 and is within the range of values that are expected for this parameter.
+
+\newpage
+
+#### Does the estimated model provide dynamic variances?
+
+```{r,fig.align='center'}
+par(mfrow=c(2,1))
+tsplot(r_VT, type='l', ylab="", xlab="")
+tsplot(fit0@fit$sigma, type='l',ylab="",xlab="")
+```
+
+This is a graphical representation that combines the returns with the sequence of estimated variances. The chart resembles the variances obtained through rolling methods.
+
+Does this choice replicate the empirical characteristics of my series?
+
+Simulation of a GARCH model and charts
+I will check if the estimated model replicates the stylized facts.
+
+AGAINST:
+```{r}
+sim0<-ugarchsim(fit0, n.sim = 5000)
+par(mfrow=c(2,1))
+tsplot(sim0@simulation$seriesSim,type="l",ylab="",xlab="")
+tsplot(sim0@simulation$sigmaSim,type="l",ylab="",xlab="")
+```
+
+We notice the presence of volatility clustering despite high persistence in volatility, but we have a frequency of extreme events which, although in line with our historical series, does not deviate too much from the many other peaks of volatility present.
+
+The model is likely unable to replicate the presence of fat tails in the distributions, therefore we must rethink the specification, changing the choice made for z and go on to analyze the results later.
+
+We will probably need to replace the normal distribution with another distribution.
+
+\newpage
+
+#### Analysis of Standardized Residuals:
+
+Having estimated a model, a variance dynamics and a distribution are hypothesized, which translates into the distribution of the quantity z.
+
+I define the quantity z as the returns deviating from the mean and standardized by the conditional variance.
+
+In the first case, the z's are independent and homoscedastic with unit variance, distributed as a normal.
+
+I can perform analysis on the standardized residuals:
+
+```{r}
+resst0 <- residuals(fit0,standardize=TRUE)
+plot(resst0)
+# analysis for GARCH effects
+y2<-(as.timeSeries(resst0))^2
+# consider 1, 2, and 3 lags for the LM test
+y2L1 <- lag(y2,1)
+y2L2 <- lag(y2,2)
+y2L3 <- lag(y2,3)
+
+# Evaluate the regression to understand if zt ^ 2 depends on its lags.
+# If alpha = 0, zt is homoscedastic.
+# If alpha is different from zero, zt is heteroscedastic.
+# Test with 1,2,3 delays, the test statistic changes.
+# The null hypothesis is that the lags are jointly zero.
+# If the test is correctly specified, I expect to have
+# no further evidence of ARCH effects.
+# three test statistics and their P-values
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,1,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,2,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,3,lower.tail=FALSE)
+
+# In this case, we do not reject the null hypothesis, the coefficients are zero,
+# in the case of the first, only one coefficient.
+```
+
+Observing the heteroscedasticity that remains may be captured by variance skewness, and hence there might be an incorrect specification of variance dynamics.
+
+A Ljung-Box test is also conducted:
+
+```{r}
+# Ljung-Box test (stats) at 5 and 10 lags
+Box.test(as.numeric(y2), lag = 5, type = "Ljung-Box")
+Box.test(as.numeric(y2), lag = 10, type = "Ljung-Box")
+```
+
+I do not reject the null hypothesis of the Ljung-Box test, and I can hypothesize that the modeling of heteroscedasticity is sufficient.
+
+The ACFs of returns, absolute values, squares, and of standardized residuals, absolute values, and squares are also evaluated from a graphical perspective.
+
+```{r}
+# Correlograms
+par(mfrow=c(2,3))
+acf(r_VT,lag.max=40,xlab="",ylab="",main="VT ret")
+acf(abs(r_VT),lag.max=40,xlab="",ylab="",main="VT abs")
+acf(abs(r_VT)^2,lag.max=40,xlab="",ylab="",main="VT sqr")
+acf(as.numeric(resst0),lag.max=40,xlab="",ylab="",main="VT ret")
+acf(abs(as.numeric(resst0)),lag.max=40,xlab="",ylab="",main="VT abs")
+acf(abs(as.numeric(resst0))^2,lag.max=40,xlab="",ylab="",main="VT sqr")
+```
+
+As seen previously, there is structure on squared returns and absolute values, while nothing notable on the standardized residuals of the estimated model.
+\newpage
+#### Assessing if the assumed distribution is correct.
+
+```{r,fig.align='center'}
+# Evaluating the density of residuals
+# QQ-plot against alternative distributions
+d0<-density(resst0)
+# Residual density
+par(mfrow=c(1,1))
+plot (d0,main ="VT stdres density",ylab ="")
+# QQ-plot against normal
+qqnorm(resst0,main="Normal Q-Q Plot",xlab="Theoretical Quantiles",ylab ="Sample Quantiles")
+qqline(resst0,col="steelblue",lwd=2)
+```
+
+The tails are fat and there seems to be some skewness present as well.
+
+It does not seem appropriate to use a normal density given the heaviness of the tails and the deviation from normality at these tails.
+
+\newpage
+#### Tests for variance skewness
+
+```{r}
+y=r_VT-mean(r_VT)
+nnr=y*(y<0)# per negative sign bias
+ppr=y*(y>0)# per positive signi bias
+dn=y<0# per sign bias
+nnr=as.timeSeries(nnr)
+ppr=as.timeSeries(ppr)
+dn=as.timeSeries(dn)
+nnr=lag(nnr,1)
+ppr=lag(ppr,1)
+dn=lag(dn,1)
+
+out.sbt=lm(resst0^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resst0^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resst0^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resst0^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+```
+
+We reject the null hypothesis (both with the sign bias test and the positive sign bias) that there is no asymmetry in the model and conclude that we likely need to model variance asymmetry using an appropriate model.
+
+\newpage
+## 3.3 "Adapt to the returns at least three different specifications from the GARCH model family (thus GARCH(1,1) plus at least two others, e.g., EGARCH, APARCH, or other possibilities provided by the library you are using). For each specification use at least two different distributions (the same for all chosen GARCH models, thus Normal and at least one other distribution). Always estimate using data up to the end of March 2022. Evaluate whether the fit to the data improves, supporting your observations with appropriate indicators, tests or graphical analysis. Among the chosen models, identify the best specification using information criteria."{#3specVT}
+
+The following will be used:
+
+1)GARCH(1,1)
+
+2)GJR-GARCH (1,1)
+
+3)APARCH (1,1)
+
+And as distributions, the Normal and the skewed t-distribution will be used.
+
+The GARCH(1,1) model is re-specified below.
+
+```{r}
+p_VT = log(window(VTd, end="2022-03-31")) #log-prices
+p_VT = as.vector(p_VT$VT.Adjusted[,1])
+T = length(p_VT)
+r_VT=100*(p_VT[2:T]-p_VT[1:T-1]) #log returns %
+y = r_VT - mean(r_VT)
+
+spec0n<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+mean.model = list(armaOrder = c(0, 0),
+include.mean = TRUE), distribution.model="norm")
+fit0n<-ugarchfit(spec0n,r_VT)
+resst0n <- residuals(fit0n,standardize=TRUE)
+fit0n@fit$robust.matcoef
+```
+
+The GJR-GARCH is specified below. 
+
+The asymmetry parameter is $\gamma_1$. 
+
+```{r,fig.align='center'}
+specgn <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+fitgn <- ugarchfit(specgn,r_VT)
+resstgn <- residuals(fitgn,standardize=TRUE)
+fitgn@fit$robust.matcoef
+```
+
+Looking at the robust p-values, obtained through quasi-maximum likelihood, of the estimated coefficients, it can be seen that they are all significant.
+
+In particular, the beta, the coefficient related to the persistence of past variances, has a high value (0.84) as expected, and it is noted that the gamma1 coefficient, related to the asymmetry in variance, is strongly significant.
+
+If the shock is positive, the effect is alpha1.
+
+If the shock is negative, the effect is $\alpha_1$ + $\gamma_1$.
+
+Below, the APARCH model is specified.
+
+```{r,fig.align='center'}
+specan <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),distribution.model="norm")
+fitan <- ugarchfit(specan,r_VT)
+resstan <- residuals(fitan,standardize=TRUE)
+fitan@fit$robust.matcoef
+```
+
+All parameters are significant:
+
+As usual, $\beta$ assumes a high value: $0.89$, and it multiplies the lagged variance indicating how much of the past volatility affects current volatility.
+
+This is the context in which we look at the asymmetry in variance:
+
+\[
+\alpha_1 \cdot (|\epsilon_{t-1}| - \gamma_1 \cdot \epsilon_{t-1})^{\delta_1}
+\]
+
+The parameter $\gamma_1$ ranges between $-1$ and $1$, and the presence of asymmetry, understood as the greater impact of negative shocks compared to positive shocks, requires that $\gamma$ be greater than zero.
+
+Indeed, if $\epsilon_{t-1}$ is greater than zero, then $\alpha_1$ multiplies:
+
+\[
+((1-\gamma) \cdot \epsilon_{t-1} )^{\delta_1}
+\]
+
+Instead, if $\epsilon_{t-1} < 0$, $\alpha_1$ multiplies:
+
+\[
+((1+\gamma) \cdot (-\epsilon_{t-1} ))^{\delta_1}
+\]
+
+Thus, as theory suggests, the impact is greater for negative shocks as $\gamma_1$ is estimated to be greater than zero.
+
+
+
+```{r}
+par(mfrow=c(1,3))
+plot(resst0n)
+plot(resstgn)
+plot(resstan)
+par(mfrow=c(1,1))
+
+ks.test(as.matrix(resst0n),"pnorm",0,1)
+```
+
+The null hypothesis of normality is rejected.
+
+\newpage
+## Specification of models by changing the distribution and using asymmetric t. 
+
+```{r}
+spec0ta <- ugarchspec(variance.model = list(model="sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),distribution.model="sstd")
+fit0ta <- ugarchfit(spec0ta,r_VT)
+resst0ta <- residuals(fit0ta,standardize=TRUE)
+
+specgta <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="sstd")
+fitgta <- ugarchfit(specgta,r_VT)
+resstgta <- residuals(fitgta,standardize=TRUE)
+
+specata <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="sstd")
+fitata <- ugarchfit(specata,r_VT)
+resstata <- residuals(fitata,standardize=TRUE)
+```
+
+The significance of the skew and shape coefficients associated with the choice of the asymmetric t-distribution is assessed below.
+
+```{r}
+fit0ta@fit$robust.matcoef
+fitgta@fit$robust.matcoef
+fitata@fit$robust.matcoef
+```
+
+Despite the $\alpha_1$ coefficient being non-significant in the GJR model with skewed-t distribution, it is customary to leave it in, whereas looking at the APARCH, one might consider removing the mean and re-estimating:
+
+```{r}
+specata <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = FALSE), distribution.model="sstd")
+fitata <- ugarchfit(specata,r_VT)
+resstata <- residuals(fitata,standardize=TRUE)
+fitata@fit$robust.matcoef
+```
+
+
+```{r}
+par(mfrow=c(1,3))
+plot(resst0ta)
+plot(resstgta)
+plot(resstata)
+par(mfrow=c(1,1))
+```
+
+
+This code is used to create a Q-Q plot to compare the theoretical distribution of the skewed-t with the empirical distribution of the standardized residuals $resst0ta$ from the previously specified GARCH(1,1) model with skewed-t.
+
+```{r}
+p=0.01*(1:99)
+qemp=quantile(resst0ta,probs=p)
+qteor=qdist(distribution="sstd",p,mu=0,sigma=1,skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6])
+qqplot(qteor,qemp,xlab="Theoretical Quantiles",ylab ="Sample Quantiles")
+qqline(qemp, distribution = function(p) 
+   qdist(distribution="sstd",p,mu=0,sigma=1,
+                  skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6]))
+```
+
+It is noted a deviation in the tails, which means that the theoretical distribution is not fully capable of capturing the variation in the data.However, this deviation is definitely less pronounced than what was seen with the normal distribution.
+
+Following is the Kolmogorov-Smirnov test to check if an empirical distribution (residuals) follows a specified theoretical distribution (skew-t distribution):
+
+```{r}
+# H0: Skew-T
+y=as.matrix(resst0ta)
+y=as.matrix(sort(y))
+ks.test(as.matrix(resst0ta),pdist(distribution="sstd",y,mu=0,sigma=1,lambda=-0.5,
+skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6]))
+```
+
+I reject the hypothesis of the distribution as a skewed-t probably due to the length of the series.
+
+However, the fit to the data seems to improve as the skew and shape parameters are always significant and as noted earlier from a graphical standpoint, the deviation in the tails seems lesser.
+
+Plots of estimated variances for the three models using the function sigma:
+
+```{r}
+# grafici varianze
+par(mfrow=c(1,3))
+sigma0n <- sigma(fit0n)
+sigmagn <- sigma(fitgn)
+sigmaan <- sigma(fitan)
+par(mfrow=c(1,3))
+plot(as.numeric(sigma0n),type="l",ylab="",xlab="")
+title("GARCH")
+plot(as.numeric(sigmagn),type="l",ylab="",xlab="")
+title("GJR-GARCH(1,1)")
+plot(as.numeric(sigmaan),type="l",ylab="",xlab="")
+title("APARCH(1,1)")
+par(mfrow=c(1,1))
+```
+
+In the three different graphs, it is difficult to notice differences.
+
+\newpage
+## Test Sign Bias
+```{r}
+y=r_VT-mean(r_VT)
+nnr=y*(y<0)# for negative sign bias
+ppr=y*(y>0)# for positive signi bias
+dn=y<0# for sign bias
+nnr=as.timeSeries(nnr)
+ppr=as.timeSeries(ppr)
+dn=as.timeSeries(dn)
+nnr=lag(nnr,1)
+ppr=lag(ppr,1)
+dn=lag(dn,1)
+
+out.sbt=lm(resst0ta^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resst0ta^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resst0ta^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resst0ta^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+
+out.sbt=lm(resstgta^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resstgta^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resstgta^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resstgta^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+
+out.sbt=lm(resstata^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resstata^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resstata^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resstata^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+```
+
+It is noticeable that using the GJR I reject in the joint test while looking at the aparch I never reject and therefore seem to capture the asymmetry in variance well. 
+
+
+```{r,fig.align='center'}
+ICall<-cbind(infocriteria(fit0n),infocriteria(fitgn),infocriteria(fitan), infocriteria(fit0ta),infocriteria(fitgta),infocriteria(fitata))
+colnames(ICall)<-c("GARCH N","GJR N","APARCH N","GARCH TA","GJR TA","APARCH TA")
+ICall_df <- data.frame(ICall)
+print(ICall_df)
+```
+
+The APARCH with skewed-t distribution appears to be the best according to information criteria.
+
+\newpage
+## 3.4 "Proceed to build one-step-ahead forecasts for the period from April 2022 to March 2023 (one year) with all the GARCH specifications from the previous point (at least 6). Evaluate any differences in the obtained forecasts by conducting a Diebold-Mariano test among all possible pairs of models. Are you able to achieve a complete ranking among the models?"{#previVT}
+
+
+```{r}
+p_VT = log(window(VTd, end="2023-03-31")) #log-prices
+p_VT = as.vector(p_VT$VT.Adjusted[,1])
+T = length(p_VT)
+r_VT=100*(p_VT[2:T]-p_VT[1:T-1]) #log returns %
+y = r_VT - mean(r_VT)
+
+# GARCH(1,1) Normal
+for0n = ugarchroll(spec0n,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+for0nd = as.data.frame(for0n)
+s0nf = for0nd$Sigma
+
+# GARCH(1,1) skew-t
+for0ta = ugarchroll(spec0ta,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+for0tad = as.data.frame(for0ta)
+s0taf = for0tad$Sigma
+
+# GJRGARCH(1,1) Normal
+forgn = ugarchroll(specgn,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forgnd = as.data.frame(forgn)
+sgnf = forgnd$Sigma
+
+# GJRGARCH(1,1) skew-t
+forgta = ugarchroll(specgta,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forgtad = as.data.frame(forgta)
+sgtaf = forgtad$Sigma
+
+# APARCH(1,1) Normal
+foran = ugarchroll(specan,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forand = as.data.frame(foran)
+sanf = forand$Sigma
+
+# APARCH(1,1) skew-t
+forata = ugarchroll(specata,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+foratad = as.data.frame(forata)
+sataf = foratad$Sigma
+```
+
+`ugarchroll` performs a rolling-window forecast, meaning it repeatedly makes a forecast by "scrolling" through the observation window, with a length specified in `window.size` and a scrolling interval specified in `refit.every`.
+
+The `refit.every` parameter specifies the number of observations after which the model is refitted to the data. 
+For example, if `refit.every = 5` and the window length (`window.size`) is 1000, the model will be refitted to the data each time the window moves by 5 observations, i.e., each time the window contains observations 1-1000, 6-1005, 11-1010, and so on.
+
+The forecast for a forecast horizon of 252 periods (one year) is specified in `forecast.length`.
+
+This code generates several graphs that show the variance forecasts obtained from the different specified models, comparing the various models with each other. This graphical comparison is crucial for visually assessing the predictive performance and stability of each model across the forecasting horizon.
+
+```{r,fig.align='center'}
+fall = cbind(s0nf,s0taf,sgnf,sgtaf,sanf,sataf)
+par(mfrow=c(1,1))
+matplot(fall, type = c("b"),pch=1,col = 1:6)
+f0 = cbind(s0nf,s0taf)
+fg = cbind(sgnf,sgtaf)
+fa = cbind(sanf,sataf)
+matplot(f0, type=('b'),pch=1,col=1:2)
+matplot(fg, type=c('b'),pch=1,col=1:2)
+matplot(fa, type=c('b'),pch=1,col=1:2)
+```
+
+Let $s0nf$ be the historical series of forecasted variances from the GARCH(1,1) model with a normal distribution. Let $rf$ be the historical series of realized volatilities.
+
+The calculated measures such as $lN$ and others are a historical series calculated as the square of the difference between the forecasted variance and the realized volatility, raised to the square. 
+
+In other words, these are the squared errors between the model's forecasts and the realized volatilities. This method quantifies the accuracy of the forecasts by measuring how closely the model's variance predictions match the actual observed volatilities in the market, providing a clear metric to assess model performance.
+
+
+```{r}
+rf = for0nd$Realized
+
+lN = (s0nf^2 -rf^2)^2 # GARCH
+lTA= (s0taf^2 -rf^2)^2 # GARCH skew-t
+lGN = (sgnf^2 -rf^2)^2 # GJRGARCH
+lGTA = (sgtaf^2 -rf^2)^2 # GJRGARCH skew-t
+lAN = (sanf^2 -rf^2)^2 # GJRGARCH t
+lATA = (sataf^2 -rf^2)^2 # APARCH
+```
+
+I calculate the differences:
+
+```{r}
+dNTA = lN-lTA 
+dNGN = lN-lGN 
+dNGTA = lN-lGTA 
+dNAN = lN-lAN 
+dNATA = lN-lATA 
+
+dTAGN = lTA-lGN 
+dTAGTA = lTA-lGTA 
+dTAAN = lTA-lAN 
+dTAATA = lTA-lATA 
+
+dGNGTA = lGN-lGTA 
+dGNAN = lGN-lAN 
+dGNATA = lGN-lATA 
+
+dGTAAN = lGTA-lAN 
+dGTAATA = lGTA-lATA 
+
+dANATA = lAN-lATA
+```
+
+The function "NeweyWest" estimates the covariance matrices of model parameters using the Newey-West method with a rolling window, with a lag equal to the variable `m` defined earlier.
+
+In this case, the outputs given by the function are scalar values and not matrices because we are estimating only one parameter.
+
+```{r}
+m<-floor(0.75*((NROW(rf))^(1/3)))
+
+x1<-as.vector(matrix(1,nrow=NROW(rf)))
+
+VNTA = NeweyWest(lm(dNTA~x1-1),lag=m,prewhite=0)
+VNGN = NeweyWest(lm(dNGN~x1-1),lag=m,prewhite=0)
+VNGTA = NeweyWest(lm(dNGTA~x1-1),lag=m,prewhite=0)
+VNAN = NeweyWest(lm(dNAN~x1-1),lag=m,prewhite=0)
+VNATA = NeweyWest(lm(dNATA~x1-1),lag=m,prewhite=0)
+
+VTAGN = NeweyWest(lm(dTAGN~x1-1),lag=m,prewhite=0)
+VTAGTA = NeweyWest(lm(dTAGTA~x1-1),lag=m,prewhite=0)
+VTAAN = NeweyWest(lm(dTAAN~x1-1),lag=m,prewhite=0)
+VTAATA = NeweyWest(lm(dTAATA~x1-1),lag=m,prewhite=0)
+
+VGNGTA = NeweyWest(lm(dGNGTA~x1-1),lag=m,prewhite=0)
+VGNAN = NeweyWest(lm(dGNAN~x1-1),lag=m,prewhite=0)
+VGNATA = NeweyWest(lm(dGNATA~x1-1),lag=m,prewhite=0)
+
+VGTAAN = NeweyWest(lm(dGTAAN~x1-1),lag=m,prewhite=0)
+VGTAATA = NeweyWest(lm(dGTAATA~x1-1),lag=m,prewhite=0)
+
+VANATA = NeweyWest(lm(dANATA~x1-1),lag=m,prewhite=0)
+
+DM<-matrix(0,nrow=6,ncol=6)
+# Output -> robust variances regressors
+
+# loss = model in row minus model in column
+colnames(DM)<-c("GARCHnorm","GARCH TA","GJRnorm","GJR ta","APARCHnorm","APARCH TA")
+rownames(DM)<-c("GARCHnorm","GARCH TA","GJRnorm","GJR ta","APARCHnorm","APARCH TA")
+
+DM[1, 2] <- mean(dNTA) / sqrt(VNTA)
+DM[1, 3] <- mean(dNGN) / sqrt(VNGN)
+DM[1, 4] <- mean(dNGTA) / sqrt(VNGTA)
+DM[1, 5] <- mean(dNAN) / sqrt(VNAN)
+DM[1, 6] <- mean(dNATA) / sqrt(VNATA)
+DM[2, 3] <- mean(dTAGN) / sqrt(VTAGN)
+DM[2, 4] <- mean(dTAGTA) / sqrt(VTAGTA)
+DM[2, 5] <- mean(dTAAN) / sqrt(VTAAN)
+DM[2, 6] <- mean(dTAATA) / sqrt(VTAATA)
+DM[3, 4] <- mean(dGNGTA) / sqrt(VGNGTA)
+DM[3, 5] <- mean(dGNAN) / sqrt(VGNAN)
+DM[3, 6] <- mean(dGNATA) / sqrt(VGNATA)
+DM[4, 5] <- mean(dGTAAN) / sqrt(VGTAAN)
+DM[4, 6] <- mean(dGTAATA) / sqrt(VGTAATA)
+DM[5, 6] <- mean(dANATA) / sqrt(VANATA)
+DM
+```
+
+#### The APARCH model with skewed-t distribution is preferable over 3 of the other models but not from a statistical standpoint. The only value that seems to be statistically significant is the superiority of the GJR with skewed-t distribution compared to the GJR with a normal distribution.
+
+
+\newpage
+&nbsp;
+\pagebreak
+\newpage
+
+# 4. EEM{#EEM}
+
+## 4.1 "Graphically represent the returns and briefly describe the stylized facts that characterize them, highlighting any differences between the financial instruments considered. Use the statistical tools you deem most appropriate for these analyses, necessarily including the verification of the possible presence of heteroscedasticity."{#plotsEEM}
+
+```{r,fig.align='center'}
+par(mfrow=c(2,3))
+plot(EEMd, main='EEMd - DAILY PRICES')
+plot(log(EEMd), main='EEMd - DAILY LOG PRICES')
+plot(diff(log(EEMd)), main='EEMd - DAILY LOG RETURN')
+acf(EEMd, lag=50)
+acf(log(EEMd), lag=50)
+acf(na.omit(diff(log(EEMd))), lag=50)
+```
+
+In the figure just above, the graphical analyses of the series are provided (from left: daily prices, daily log-prices, and daily log-returns) and the corresponding correlograms.
+A strong upward trend of the EEM ETF can be identified in the first part of the time interval considered, while subsequently, although present, the upward trend is limited.
+
+It can also be noted a clustering behavior of volatility (observable, more clearly, on the series of log-returns), where periods of high volatility are followed by periods of low volatility.
+As for the global autocorrelations (ACF), as per theory, the hypotheses of a clear evidence of non-stationarity of the stochastic process are confirmed; while, in the log-returns, although there are some statistically significant values (due to the large amplitude of the series) these can be considered almost irrelevant from an economic standpoint.
+Thus, an uncorrelation of the data is verified, at least economically insignificant; which is however not confirmed by the Ljung-Box test.
+The Ljung-Box test indeed tests the uncorrelation of the data, and with a low p-value, we reject the null hypothesis of uncorrelation and conclude that at least statistically there is a form of serial dependence in the log returns.
+
+```{r,warning=FALSE}
+dlEEMs = na.omit(diff(log(EEMd)))
+outB = Box.test(dlEEMs,1:20)
+round(outB$p.value, 5)
+```
+
+\newpage
+### Analysis of deviation from normality
+
+```{r}
+par(mfrow=c(2,3))
+dlEEMs = na.omit(diff(log(EEMd)))
+plot(density(dlEEMs), main='EEMd- DAILY RETURNS DENSITY')
+qqnorm(dlEEMs,main="Normal Q-Q Plot",xlab="Theoretical Quantiles",ylab="Sample Quantiles")
+qqline(dlEEMs,col="steelblue",lwd=2)
+acf(dlEEMs,20,main='')
+dlEEMs2=(dlEEMs)^2
+plot(dlEEMs2, main='EEMd - SQUARED LOG.RET')
+acf(dlEEMs2, 20)
+pacf(dlEEMs2, 20)      
+```
+
+In this case, some typical characteristics of a financial instrument that should be analyzed individually are represented in the figure: the empirical hypothesis of non-normality of the historical series is at least graphically confirmed, particularly due to strong kurtosis visible in the top-left graph showing very thick tails, and deviation from normality on the tails also visible in the qq-plot.
+The asymmetry, which is another empirical characteristic, for an ETF like EEM that contains many companies within it, seems almost approaching nullity.
+In the second group of figures, below, a proxy of the variance (i.e., the series of squared returns) is analyzed: also in this case, it can be observed that the levels of variability (on which subsequently models that can estimate it are to be built) are not always constant and indeed suggest a sort of serial dependence, quite clearly confirmed by the ACF of squared returns.
+
+\newpage
+### Test for the presence of unit roots
+```{r}
+out1 = adfTest(log(EEMd), lag=21, type='c')
+summary(out1@test$lm)
+```
+
+By removing one lag at a time and assessing the significance of the coefficient associated with the last delay in the linear regression model built during the ADF (Augmented Dickey-Fuller) test for stationarity of a time series, it is found that the lags to use are 20 and the intercept is significant.
+
+```{r}
+out1 = adfTest(log(EEMd), lag=18, type='c')
+summary(out1@test$lm)
+```
+```{r,include=FALSE}
+#important because the number of lags considered in an ADF (Augmented Dickey-Fuller test) represents the amount of lagging of the error term that is included in the model. In practice, each additional delay corresponds to a greater consideration of the past variations of the historical series in the statistical model used for the test.
+```
+
+We then proceed to run the command without saving the output:
+
+```{r}
+adfTest(log(EEMd), lag=18, type='c')
+```
+
+It is noted that, unlike the observed results, the null hypothesis of non-stationarity of the historical series, or that it is affected by a unit root, is rejected. Statistically, therefore, it cannot be proven that the prices are non-stationary.
+
+By removing one lag at a time and assessing the significance of the coefficient associated with the last delay in the linear regression model built during the ADF (Augmented Dickey-Fuller) test for stationarity of a time series, it is found that the lags to use are 17 and the intercept is not significant.
+
+```{r,warning=FALSE}
+out1 = adfTest(dlEEMs, lag=17, type='nc')
+summary(out1@test$lm)
+adfTest(dlEEMs, lag=17, type='nc')
+```
+
+As expected in this case, the null hypothesis is rejected.
+
+\newpage
+### The goal of the analysis is to verify whether heteroscedasticity is present or not, and if it allows for the application of a model subsequently.
+
+The log-prices are calculated below up to March 31, 2022, and the percentage log returns.
+
+```{r}
+p_EEM = log(window(EEMd, end="2022-03-31")) #log-prices
+p_EEM = as.vector(p_EEM$EEM.Adjusted[,1])
+T = length(p_EEM)
+r_EEM=100*(p_EEM[2:T]-p_EEM[1:T-1]) #log percentage returns
+par(mfrow=c(1,1))
+tsplot(r_EEM, ylab='EEM') # plot of log percentage returns
+```
+
+As already noted earlier, the effect of volatility clustering is present, with phases of high volatility followed by periods of stability.
+
+The ACFs on returns, absolute values, and squares are then shown.
+Serial dependence is noted on the absolute values and their squares.
+On the returns, it is observed that some values exceed the bands which however suffer from sample dependence (with 4776 observations they are indeed very small).
+
+If we focus on absolute values and squares, a strong serial correlation emerges, strong even up to 40 lags, indicating significant persistence.
+This behavior is typically common to observe in financial instruments that exhibit certain characteristics, while instead with securities that fluctuate a lot, or that are less liquid, we might find little serial correlation.
+
+```{r}
+par(mfrow=c(1,3))
+acf(r_EEM,lag.max=40,xlab="",ylab="",main="EEM ret")
+acf(abs(r_EEM),lag.max=40,xlab="",ylab="",main="EEM abs")
+acf(abs(r_EEM)^2,lag.max=40,xlab="",ylab="",main="EEM sqr")
+```
+
+One of the first elements to assess heteroscedasticity and understand how it translates in terms of variances is the rolling variance.
+Using 62 observations we have a window of more or less the duration of a quarter while with 126 of a semester.
+
+```{r,warning=FALSE}
+par(mfrow=c(1,1))
+rollV=rollStats(as.timeSeries(r_EEM),62,FUN=var)
+tsplot(rollV,ylab="",xlab="")
+rollV=rollStats(as.timeSeries(r_EEM),126,FUN=var)
+tsplot(rollV,ylab="",xlab="")
+```
+
+We notice that the historical series as expected is characterized by heteroscedasticity; more smoothed trends can be seen on the graph with 126 observations due to the fact that the addition of an observation changes less than 1% of the sample.
+
+#### We also accompany the analysis with statistical nature tests:
+
+LJUNG BOX AND ARCH TESTS
+
+We expect to reject the null hypothesis and thus the rejection that the autocorrelation functions are all zero up to lag 5 or 10.
+
+The test statistic is a chi-square, with degrees of freedom depending on the lags considered.
+
+#### Ljung-Box Test at lags 5 and 10
+```{r}
+y2 = (r_EEM - mean(r_EEM))^2 # returns squared, deviation from the mean
+Box.test(y2, lag = 5, type = "Ljung-Box")
+Box.test(y2, lag = 10, type = "Ljung-Box")
+```
+
+As expected, the p-value is low and the null hypothesis of uncorrelation is rejected.
+
+#### LM-ARCH Test
+
+We now proceed with the LM-ARCH test implementing the auxiliary regression.
+The test assesses the null hypothesis of homoscedasticity against the alternative hypothesis of heteroscedasticity. If the test statistic exceeds a certain critical threshold, the null hypothesis of no heteroscedasticity is rejected and we move towards the alternative hypothesis of the presence of heteroscedasticity.
+
+The code below considers 1, 2, and 3 lags for the test:
+
+```{r}
+# consider 1, 2, and 3 lags for the LM test
+y2=as.timeSeries(y2)
+y2L1 <- lag(y2,1)
+y2L2 <- lag(y2,2)
+y2L3 <- lag(y2,3)
+# three test statistics and corresponding P-values
+# 
+# First lag:
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+# using T-2 because we lose some observations in lags 1,2,3 and for comparison, I choose 2
+pchisq(LMARCH1,1,lower.tail=FALSE)# test only on the upper tail
+# Second lag:
+out2 <- lm(y2 ~ y2L1 + y2L2)
+sum2 <- summary(out2)
+LMARCH2 <- sum2$r.squared*(T-2)
+pchisq(LMARCH2,2,lower.tail=FALSE)
+# Third lag:
+out3 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum3 <- summary(out3)
+LMARCH3 <- sum3$r.squared*(T-2)
+pchisq(LMARCH3,3,lower.tail=FALSE)
+```
+
+In all three cases, the null hypothesis is rejected and it is concluded that there is heteroscedasticity in the historical series considered.
+
+### Similarities/Differences with the VT instrument
+
+For both instruments, the tails are heavy, so the normal distribution seems inappropriate. Moreover, asymmetry seems present but not very high, indicative of the fact that ETFs are composed of many stocks.
+
+In both instruments, the phenomenon of volatility clustering is present.
+For both instruments, the presence of homoscedasticity is rejected, and thus evaluations will proceed that model the present heteroscedasticity.
+
+## 4.2 "Fit a GARCH(1,1) model with a normal distribution to the returns. The sample used for estimation should go up to the end of March 2022, leaving a year for subsequent analysis. Comment on the differences in fit to the data between the two considered securities, evaluating the presence of heteroscedasticity in the standardized residuals, the presence of asymmetry, and the appropriateness of the distribution choice for the innovations."{#garchEEM}
+
+### GARCH(1,1) Model
+
+We now want to fit a GARCH(1,1) model capable of capturing the heteroscedasticity present in the historical series.
+
+The GARCH(1,1) model assumes that the volatility of the financial asset partly depends on the volatility of the previous time interval and on an error term.
+
+Specifically, the formula for conditional volatility at time \( t \) is:
+
+\[
+\sigma_t^2 = \omega + \alpha r_{t-1}^2 + \beta \sigma_{t-1}^2
+\]
+
+where \( \sigma_t^2 \) is the volatility conditional on time \( t \), \( \omega \) represents the baseline level of volatility, \( \alpha \) is the weight of the squared residual at time \( t-1 \), and \( \beta \) is the weight of the conditional volatility at time \( t-1 \).
+
+Model specification:
+
+```{r}
+spec0<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+# estimate model saving output
+fit0<-ugarchfit(spec0,r_EEM)
+# estimate model with output on screen
+fit0@fit$robust.matcoef
+```
+
+From the p-values calculated with the quasi-maximum likelihood method, it is noted that all parameters are statistically significant.
+
+Beta assumes a value of 0.88 and is in the range of values expected for this parameter.
+
+\newpage
+#### Does the estimated model provide variances that have dynamics?
+
+```{r,fig.align='center'}
+par(mfrow=c(2,1))
+tsplot(r_EEM, type='l', ylab="", xlab="")
+tsplot(fit0@fit$sigma, type='l',ylab="",xlab="")
+```
+
+Graphic representation that combines returns with the sequence of estimated variances.
+The chart resembles variances obtained through rolling methods.
+
+Does the chosen specification replicate the empirical characteristics of my series?
+
+Simulation of a GARCH model and graphs
+Let's see if the estimated model replicates the stylized facts.
+
+CONS:
+```{r}
+sim0<-ugarchsim(fit0, n.sim = 5000)
+par(mfrow=c(2,1))
+tsplot(sim0@simulation$seriesSim,type="l",ylab="",xlab="")
+tsplot(sim0@simulation$sigmaSim,type="l",ylab="",xlab="")
+```
+
+There is no noticeable presence of volatility clustering as there is visible high persistence of volatility.
+We have a frequency of extreme events that is quite high and does not deviate too much from the many other peaks of volatility present.
+
+The model probably cannot replicate the presence of thick tails on the distributions, thus we need to reconsider the specification, changing the choice made for z and analyzing the results subsequently.
+
+We will likely need to replace the normal distribution with another distribution.
+
+\newpage
+#### Analysis of Standardized Residuals:
+
+Having estimated a model, a variance dynamics and a distribution are hypothesized, which translates into the distribution of the quantity \( z \).
+
+I define the quantity \( z \) as the returns deviated from the mean and standardized by the conditional variance.
+
+In the first case, the \( z \)'s are independent and homoscedastic with unit variance, distributed as a normal.
+
+I can perform analysis on standardized residuals:
+
+```{r}
+resst0 <- residuals(fit0,standardize=TRUE)
+plot(resst0)
+# analysis for GARCH effects
+y2 <- (as.timeSeries(resst0))^2
+# consider 1, 2, and 3 lags for the LM test
+y2L1 <- lag(y2,1)
+y2L2 <- lag(y2,2)
+y2L3 <- lag(y2,3)
+
+# Evaluate the regression to understand if z_t^2 depends on its lags.
+# If alpha = 0 then z_t is homoschedastic.
+# If alpha is not 0 then z_t is heteroschedastic.
+# Try with 1,2,3 lags, changing the test statistic.
+# The null hypothesis is that the lags are jointly zero.
+# If the test is correctly specified, I expect to have
+# no further evidence of ARCH effects.
+# three test statistics and corresponding P-values
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,1,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,2,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,3,lower.tail=FALSE)
+
+# In this case, we do not reject the null hypothesis, the coefficients are zero.
+```
+
+It's possible that the remaining heteroscedasticity can be captured by variance asymmetry, and therefore there may be an incorrect specification of the variance dynamics. Furthermore, it might also be that the GARCH(1,1) model is not suitable and an increase in the order of coefficients should be considered.
+
+This choice is not explored in the following analyses but it is shown that the LM test never rejects the null hypothesis when increasing the order of coefficients.
+
+However, it is noted that the \( \beta_1 \) coefficient in this case would be not significant.
+
+```{r}
+spec22<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(2, 2)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+# estimate model saving output
+fit22<-ugarchfit(spec22,r_EEM)
+# estimate model with output on screen
+fit22@fit$robust.matcoef
+
+resst22 <- residuals(fit22,standardize=TRUE)
+# analysis for GARCH effects
+y2 <- (as.timeSeries(resst22))^2
+# consider 1, 2, and 3 lags for the LM test
+y2L1 <- lag(y2,1)
+y2L2 <- lag(y2,2)
+y2L3 <- lag(y2,3)
+
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,1,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,2,lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1,3,lower.tail=FALSE)
+```
+
+It is possible that the remaining heteroscedasticity can be captured by variance asymmetry, suggesting a mis-specification in the variance dynamics. Furthermore, the GARCH(1,1) model might not be suitable, and an increase in the order of coefficients may be needed.
+
+This choice is not explored in the subsequent analyses, but it is shown that the LM test never rejects the null hypothesis when the order of coefficients is increased.
+
+However, it is noted that the \( \beta_1 \) coefficient in this case would be not significant.
+
+```{r}
+spec22<-ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(2, 2)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+# estimate model saving output
+fit22<-ugarchfit(spec22, r_EEM)
+# estimate model with output on screen
+fit22@fit$robust.matcoef
+
+resst22 <- residuals(fit22, standardize=TRUE)
+# analysis for GARCH effects
+y2 <- (as.timeSeries(resst22))^2
+# consider 1, 2, and 3 lags for the LM test
+y2L1 <- lag(y2, 1)
+y2L2 <- lag(y2, 2)
+y2L3 <- lag(y2, 3)
+
+out1 <- lm(y2 ~ y2L1)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1, 1, lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1, 2, lower.tail=FALSE)
+out1 <- lm(y2 ~ y2L1 + y2L2 + y2L3)
+sum1 <- summary(out1)
+LMARCH1 <- sum1$r.squared*(T-2)
+pchisq(LMARCH1, 3, lower.tail=FALSE)
+```
+
+Returning to the GARCH(1,1), a Ljung Box test is also conducted:
+
+```{r}
+y2 <- (as.timeSeries(resst0))^2
+# Ljung-Box test (stats) at 5 and 10 lags
+Box.test(as.numeric(y2), lag = 5, type = "Ljung-Box")
+Box.test(as.numeric(y2), lag = 10, type = "Ljung-Box")
+```
+
+I do not reject the null hypothesis of the Ljung Box, and it can be hypothesized that the modeling of heteroscedasticity is sufficient according to this test.
+
+The ACF of returns, absolute values, and squares and of standardized residuals, absolute values, and squares are also evaluated graphically.
+
+```{r,fig.align='center'}
+# correlograms
+par(mfrow=c(2,3))
+acf(r_EEM, lag.max=40, xlab="", ylab="", main="EEM ret")
+acf(abs(r_EEM), lag.max=40, xlab="", ylab="", main="EEM abs")
+acf(abs(r_EEM)^2, lag.max=40, xlab="", ylab="", main="EEM sqr")
+acf(as.numeric(resst0), lag.max=40, xlab="", ylab="", main="EEM ret")
+acf(abs(as.numeric(resst0)), lag.max=40, xlab="", ylab="", main="EEM abs")
+acf(abs(as.numeric(resst0))^2, lag.max=40, xlab="", ylab="", main="EEM sqr")
+```
+
+As seen before, there is structure on squared returns and absolute values, while nothing notable is observed on the standardized residuals of the estimated model.
+
+#### We evaluate if the assumed distribution is correct.
+
+```{r,fig.align='center'}
+# Evaluation of residual density
+# QQ-plot against alternative distributions
+d0 <- density(resst0)
+# Residual density
+par(mfrow=c(1,1))
+plot(d0, main="EEM stdres density", ylab="")
+# Thick tails, density of standardized residuals
+# QQ-plot against normal distribution
+qqnorm(resst0, main="Normal Q-Q Plot", xlab="Theoretical Quantiles", ylab="Sample Quantiles")
+qqline(resst0, col="steelblue", lwd=2)
+```
+
+The tails are thick and there appears to be some asymmetry.
+
+Therefore, it does not seem appropriate to use a normal density given the heaviness of the tails and the deviation from normality at those points.
+
+\newpage
+#### Test for variance asymmetry
+
+```{r}
+y = r_EEM - mean(r_EEM)
+nnr = y * (y < 0) # for negative sign bias
+ppr = y * (y > 0) # for positive sign bias
+dn = y < 0 # for sign bias
+nnr = as.timeSeries(nnr)
+ppr = as.timeSeries(ppr)
+dn = as.timeSeries(dn)
+nnr = lag(nnr, 1)
+ppr = lag(ppr, 1)
+dn = lag(dn, 1)
+
+out.sbt = lm(resst0^2 ~ dn)
+summary(out.sbt)
+out.nsbt = lm(resst0^2 ~ nnr)
+summary(out.nsbt)
+out.psbt = lm(resst0^2 ~ ppr)
+summary(out.psbt)
+out.jsbt = lm(resst0^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+```
+
+We reject the null hypothesis (both with the sign bias test and the positive sign bias, and partly also with the joint test) that there is no asymmetry in the model and conclude that we probably need to model variance asymmetry using an appropriate model.
+
+### Similarities/Differences with the VT instrument
+
+In both cases, all parameters of the GARCH(1,1) are significant.
+
+Regarding VT, I do not reject the hypothesis of homoscedasticity in the residuals more clearly. While for the EEM instrument, it is noted that higher orders might be necessary in the GARCH model.
+
+In both instruments, it is concluded that there is a need to model variance asymmetry following the sign bias tests.
+
+Moreover, in both instruments, the normal distribution seems unsuitable when looking at the QQ plot of the model's residuals (more evidently in VT than in EEM).
+
+\newpage
+## 4.3 "Fit at least three different specifications from the GARCH model family (thus GARCH(1,1) plus at least two others, e.g., EGARCH, APARCH, or other options provided by the library you are using). For each specification use at least two different distributions (the same for all chosen GARCH models, thus Normal and at least one other distribution). Always estimate using data up to the end of March 2022. Evaluate whether the adaptation to the data improves, supporting your observations with appropriate indicators, tests, or graphical analysis. Among the chosen models, identify the best specification using information criteria."{#3specEEM}
+
+We will use:
+
+1)GARCH(1,1)
+2)GJR-GARCH (1,1)
+3) APARCH (1,1)
+
+And the distributions will be Normal and skewed-t.
+
+Below, the GARCH(1,1) model is re-specified:
+
+```{r}
+p_EEM = log(window(EEMd, end="2022-03-31")) # log-prices
+p_EEM = as.vector(p_EEM$EEM.Adjusted[,1])
+T = length(p_EEM)
+r_EEM = 100 * (p_EEM[2:T] - p_EEM[1:T-1]) # log percentage returns
+y = r_EEM - mean(r_EEM)
+
+spec0n <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+fit0n <- ugarchfit(spec0n, r_EEM)
+resst0n <- residuals(fit0n, standardize=TRUE)
+fit0n@fit$robust.matcoef
+```
+
+Next, the GJR-GARCH is specified.
+
+The parameter related to asymmetry is \(\gamma_1\):
+
+```{r,fig.align='center'}
+specgn <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+fitgn <- ugarchfit(specgn, r_EEM)
+resstgn <- residuals(fitgn, standardize=TRUE)
+fitgn@fit$robust.matcoef
+```
+
+Looking at the robust p-values, obtained through quasi-maximum likelihood, the estimated coefficients are all significant except for the mean \(\mu\), so it can be re-estimated setting include.mean=FALSE.
+
+```{r,fig.align='center'}
+specgn <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = FALSE), distribution.model="norm")
+fitgn <- ugarchfit(specgn, r_EEM)
+resstgn <- residuals(fitgn, standardize=TRUE)
+fitgn@fit$robust.matcoef
+```
+
+In particular, \(\beta\), the coefficient related to the persistence of past variances, assumes a high value (0.89) as expected, and it is noted that the coefficient \(\gamma_1\), related to variance asymmetry, is strongly significant.
+
+If the shock is positive, the effect is \(\alpha_1\).
+If the shock is negative, the effect is \(\alpha_1 + \gamma_1\).
+
+Next, the APARCH model is specified.
+All coefficients are significant except for the mean \(\mu\).
+
+```{r,fig.align='center'}
+specan <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="norm")
+fitan <- ugarchfit(specan, r_EEM)
+fitan@fit$robust.matcoef
+```
+
+It is noted that the mean is not significant and the model is re-estimated removing it by setting include.mean = FALSE.
+
+```{r}
+specan <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = FALSE), distribution.model="norm")
+fitan <- ugarchfit(specan, r_EEM)
+resstan <- residuals(fitan, standardize=TRUE)
+fitan@fit$robust.matcoef
+```
+
+All parameters are significant:
+
+\(\beta\) as usual assumes a high value: 0.90 and multiplies the delayed variance indicating how much of the past volatility impacts the current volatility.
+
+This is the context in which we find ourselves for looking at the part of the asymmetry in variance:
+
+\[
+\alpha_1 \times (|\epsilon_{t-1}| - \gamma_1 \epsilon_{t-1})^{\delta_1}
+\]
+
+The parameter \(\gamma_1\) assumes values between -1 and 1 and the presence of asymmetry, understood as the greater impact of negative shocks compared to positive shocks, requires that \(\gamma\) be greater than zero.
+
+If \(\epsilon_{t-1}\) is greater than zero, then it is found that \(\alpha_1\) multiplies:
+
+\[
+((1-\gamma) \times \epsilon_{t-1})^{\delta_1}
+\]
+
+Instead, if \(\epsilon_{t-1} < 0\) it is found that \(\alpha_1\) multiplies:
+
+\[
+((1+\gamma) \times (-\epsilon_{t-1}))^{\delta_1}
+\]
+
+And thus, as per the theory, the impact is greater for negative shocks given \(\gamma_1\) greater than zero.
+
+
+```{r}
+par(mfrow=c(1,3))
+plot(resst0n)
+plot(resstgn)
+plot(resstan)
+par(mfrow=c(1,1))
+
+ks.test(as.matrix(resst0n),"pnorm",0,1)
+```
+
+The null hypothesis of normality is rejected.
+
+\newpage
+## Specification of Models Changing the Distribution and Using the Skewed-t.
+
+```{r}
+spec0ta <- ugarchspec(variance.model = list(model="sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="sstd")
+fit0ta <- ugarchfit(spec0ta,r_EEM)
+resst0ta <- residuals(fit0ta,standardize=TRUE)
+
+specgta <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="sstd")
+fitgta <- ugarchfit(specgta,r_EEM)
+resstgta <- residuals(fitgta,standardize=TRUE)
+
+specata <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = TRUE), distribution.model="sstd")
+fitata <- ugarchfit(specata,r_EEM)
+resstata <- residuals(fitata,standardize=TRUE)
+```
+
+Below, we evaluate the significance of the skew and shape coefficients related to the choice of the skewed-t distribution:
+
+```{r}
+fit0ta@fit$robust.matcoef
+fitgta@fit$robust.matcoef
+fitata@fit$robust.matcoef
+```
+
+Looking at the GJR and APARCH, one might consider removing the mean and re-estimating:
+
+```{r}
+specgta <- ugarchspec(variance.model = list(model="gjrGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = FALSE), distribution.model="sstd")
+fitgta <- ugarchfit(specgta,r_EEM)
+resstgta <- residuals(fitgta,standardize=TRUE)
+
+specata <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(0, 0), include.mean = FALSE), distribution.model="sstd")
+fitata <- ugarchfit(specata,r_EEM)
+resstata <- residuals(fitata,standardize=TRUE)
+```
+
+```{r}
+fit0ta@fit$robust.matcoef
+fitgta@fit$robust.matcoef
+fitata@fit$robust.matcoef
+```
+
+The comments made previously regarding the estimated parameters remain valid for the models even in this case. The evaluation now includes the significance of the data's asymmetry and the degrees of freedom of the t.
+
+```{r}
+par(mfrow=c(1,3))
+plot(resst0ta)
+plot(resstgta)
+plot(resstata)
+par(mfrow=c(1,1))
+```
+
+This code is used to create a Q-Q plot to compare the theoretical distribution of the skewed Student's t with the empirical distribution of the standardized residuals resst0ta from the GARCH(1,1) model with skewed-t specified earlier.
+
+```{r}
+p=0.01*(1:99)
+qemp=quantile(resst0ta,probs=p)
+qteor=qdist(distribution="sstd",p,mu=0,sigma=1,skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6])
+qqplot(qteor,qemp,xlab="Theoretical Quantiles",ylab ="Sample Quantiles")
+qqline(qemp, distribution = function(p) qdist(distribution="sstd",p,mu=0,sigma=1,skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6]))
+```
+
+A slight deviation on the tails is observed, which means that the theoretical distribution is not fully capable of capturing the variation in the data.
+However, this deviation is certainly less pronounced than what was seen with the normal distribution.
+
+Below is the Kolmogorov-Smirnov test to verify if an empirical distribution (residuals) follows a specified theoretical distribution (skewed-t distribution).
+
+```{r}
+# H0: Skew-T
+y=as.matrix(resst0ta)
+y=as.matrix(sort(y))
+ks.test(as.matrix(resst0ta),pdist(distribution="sstd",y,mu=0,sigma=1,lambda=-0.5,
+skew=fit0ta@fit$coef[5],shape=fit0ta@fit$coef[6]))
+```
+
+I reject the hypothesis of the distribution as a skewed-t, likely due to the length of the series.
+
+However, the fit to the data seems to improve as the skew and shape parameters are always significant, and as noted earlier, the deviation at the tails appears to be less.
+
+Graphs of the estimated variances for the three models using the sigma function:
+
+```{r}
+# variance plots
+par(mfrow=c(1,3))
+sigma0n <- sigma(fit0n)
+sigmagn <- sigma(fitgn)
+sigmaan <- sigma(fitan)
+par(mfrow=c(1,3))
+plot(as.numeric(sigma0n),type="l",ylab="",xlab="")
+title("GARCH")
+plot(as.numeric(sigmagn),type="l",ylab="",xlab="")
+title("GJR-GARCH(1,1)")
+plot(as.numeric(sigmaan),type="l",ylab="",xlab="")
+title("APARCH(1,1)")
+par(mfrow=c(1,1))
+```
+
+In the 3 plots it is difficult to notcie diffrences. 
+
+\newpage
+## Test Sign Bias
+```{r}
+y=r_EEM-mean(r_EEM)
+nnr=y*(y<0)# for negative sign bias
+ppr=y*(y>0)# for positive signi bias
+dn=y<0# for sign bias
+nnr=as.timeSeries(nnr)
+ppr=as.timeSeries(ppr)
+dn=as.timeSeries(dn)
+nnr=lag(nnr,1)
+ppr=lag(ppr,1)
+dn=lag(dn,1)
+
+out.sbt=lm(resst0ta^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resst0ta^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resst0ta^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resst0ta^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+
+out.sbt=lm(resstgta^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resstgta^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resstgta^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resstgta^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+
+out.sbt=lm(resstata^2 ~ dn)
+summary(out.sbt)
+out.nsbt=lm(resstata^2 ~ nnr)
+summary(out.nsbt)
+out.psbt=lm(resstata^2 ~ ppr)
+summary(out.psbt)
+out.jsbt=lm(resstata^2 ~ dn + nnr + ppr)
+summary(out.jsbt)
+```
+
+It is noted that using the GJR, I reject in the sign bias test and the joint test, while looking at the APARCH, I never reject, and thus it seems to capture the asymmetry in variance well.
+
+
+```{r,fig.align='center'}
+ICall<-cbind(infocriteria(fit0n),infocriteria(fitgn),infocriteria(fitan),
+infocriteria(fit0ta),infocriteria(fitgta),infocriteria(fitata))
+colnames(ICall)<-c("GARCH N","GJR N","APARCH N","GARCH TA","GJR TA","APARCH TA")
+ICall_df <- data.frame(ICall)
+print(ICall_df)
+```
+
+The APARCH with the skewed-t distribution appears to be the best according to three information criteria, while according to the Bayes criterion, the GJR with the skewed-t is better.
+
+\newpage
+## 4.4 "Proceed to construct one-step-ahead forecasts for the period from April 2022 to March 2023 (one year) with all the GARCH specifications from the previous point (at least 6). Evaluate any differences in the obtained forecasts by conducting a Diebold-Mariano test among all possible pairs of models. Are you able to obtain a complete ranking among the models?"{#previEEM}
+
+```{r}
+p_EEM = log(window(EEMd, end="2023-03-31")) #log-prices
+p_EEM = as.vector(p_EEM$EEM.Adjusted[,1])
+T = length(p_EEM)
+r_EEM=100*(p_EEM[2:T]-p_EEM[1:T-1]) #log percentage returns
+y = r_EEM - mean(r_EEM)
+
+# GARCH(1,1) Normal
+for0n = ugarchroll(spec0n,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+for0nd = as.data.frame(for0n)
+s0nf = for0nd$Sigma
+
+# GARCH(1,1) Skewed-Student t
+for0ta = ugarchroll(spec0ta,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+for0tad = as.data.frame(for0ta)
+s0taf = for0tad$Sigma
+
+# GJRGARCH(1,1) Normal
+forgn = ugarchroll(specgn,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forgnd = as.data.frame(forgn)
+sgnf = forgnd$Sigma
+
+# GJRGARCH(1,1) Skewed-Student t
+forgta = ugarchroll(specgta,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forgtad = as.data.frame(forgta)
+sgtaf = forgtad$Sigma
+
+# APARCH(1,1) Normal
+foran = ugarchroll(specan,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+forand = as.data.frame(foran)
+sanf = forand$Sigma
+
+# APARCH(1,1) Skewed-Student t
+forata = ugarchroll(specata,data=y,forecast.length=252,refit.every=5,window.size=1000, refit.window="moving")
+foratad = as.data.frame(forata)
+sataf = foratad$Sigma
+```
+
+Ugarchroll performs a rolling-window forecast, repeatedly making a forecast by "sliding" the observation window, with a length specified in window.size and a sliding interval specified in refit.every.
+
+The refit.every parameter specifies the number of observations after which the model is refitted to the data. 
+For example, if refit.every=5 and the window length (window.size) is 1000, the model will be refitted to the data each time the window moves by 5 observations, i.e., each time the window contains observations 1-1000, 6-1005, 11-1010, and so on.
+
+The forecast for a forecast horizon of 252 periods (one year) is specified in forecast.length.
+
+This code creates several graphs showing the variance forecasts obtained from the different specified models, comparing the different models to each other.
+
+```{r,fig.align='center'}
+fall = cbind(s0nf,s0taf,sgnf,sgtaf,sanf,sataf)
+par(mfrow=c(1,1))
+matplot(fall, type = c("b"),pch=1,col = 1:6)
+f0 = cbind(s0nf,s0taf)
+fg = cbind(sgnf,sgtaf)
+fa = cbind(sanf,sataf)
+matplot(f0, type=('b'),pch=1,col=1:2)
+matplot(fg, type=c('b'),pch=1,col=1:2)
+matplot(fa, type=c('b'),pch=1,col=1:2)
+```
+
+s0nf is the historical series of variances forecasted by the GARCH(1,1) model with a normal distribution. rf is the historical series of realized volatilities.
+
+lN and the other calculated measures are a historical series calculated as the square of the difference between the variance forecast and the realized volatility, squared.
+
+In other words, the quadratic errors between the model's forecasts and the realized volatilities are being calculated.
+
+```{r}
+rf = for0nd$Realized
+
+lN = (s0nf^2 -rf^2)^2 # GARCH
+lTA= (s0taf^2 -rf^2)^2 # GARCH skewed-t
+lGN = (sgnf^2 -rf^2)^2 # GJRGARCH
+lGTA = (sgtaf^2 -rf^2)^2 # GJRGARCH skewed-t
+lAN = (sanf^2 -rf^2)^2 # GJRGARCH t
+lATA = (sataf^2 -rf^2)^2 # APARCH
+```
+
+Calculation of the differences
+```{r}
+dNTA = lN-lTA 
+dNGN = lN-lGN 
+dNGTA = lN-lGTA 
+dNAN = lN-lAN 
+dNATA = lN-lATA 
+
+dTAGN = lTA-lGN 
+dTAGTA = lTA-lGTA 
+dTAAN = lTA-lAN 
+dTAATA = lTA-lATA 
+
+dGNGTA = lGN-lGTA 
+dGNAN = lGN-lAN 
+dGNATA = lGN-lATA 
+
+dGTAAN = lGTA-lAN 
+dGTAATA = lGTA-lATA 
+
+dANATA = lAN-lATA
+```
+
+The "NeweyWest" function estimates the covariance matrices of model parameters using the Newey-West method with a rolling window, with a lag equal to the variable "m" previously defined.
+
+In this case, the outputs given by the function are scalar values and not matrices because we are estimating only one parameter.
+
+```{r}
+m<-floor(0.75*((NROW(rf))^(1/3)))
+
+x1<-as.vector(matrix(1,nrow=NROW(rf)))
+
+VNTA = NeweyWest(lm(dNTA~x1-1),lag=m,prewhite=0)
+VNGN = NeweyWest(lm(dNGN~x1-1),lag=m,prewhite=0)
+VNGTA = NeweyWest(lm(dNGTA~x1-1),lag=m,prewhite=0)
+VNAN = NeweyWest(lm(dNAN~x1-1),lag=m,prewhite=0)
+VNATA = NeweyWest(lm(dNATA~x1-1),lag=m,prewhite=0)
+
+VTAGN = NeweyWest(lm(dTAGN~x1-1),lag=m,prewhite=0)
+VTAGTA = NeweyWest(lm(dTAGTA~x1-1),lag=m,prewhite=0)
+VTAAN = NeweyWest(lm(dTAAN~x1-1),lag=m,prewhite=0)
+VTAATA = NeweyWest(lm(dTAATA~x1-1),lag=m,prewhite=0)
+
+VGNGTA = NeweyWest(lm(dGNGTA~x1-1),lag=m,prewhite=0)
+VGNAN = NeweyWest(lm(dGNAN~x1-1),lag=m,prewhite=0)
+VGNATA = NeweyWest(lm(dGNATA~x1-1),lag=m,prewhite=0)
+
+VGTAAN = NeweyWest(lm(dGTAAN~x1-1),lag=m,prewhite=0)
+VGTAATA = NeweyWest(lm(dGTAATA~x1-1),lag=m,prewhite=0)
+
+VANATA = NeweyWest(lm(dANATA~x1-1),lag=m,prewhite=0)
+
+DM<-matrix(0,nrow=6,ncol=6)
+# Output -> robust variances of regressor
+
+# loss = model in row minus model il column
+colnames(DM)<-c("GARCHnorm","GARCH TA","GJRnorm","GJR ta","APARCHnorm","APARCH TA")
+rownames(DM)<-c("GARCHnorm","GARCH TA","GJRnorm","GJR ta","APARCHnorm","APARCH TA")
+
+DM[1, 2] <- mean(dNTA) / sqrt(VNTA)
+DM[1, 3] <- mean(dNGN) / sqrt(VNGN)
+DM[1, 4] <- mean(dNGTA) / sqrt(VNGTA)
+DM[1, 5] <- mean(dNAN) / sqrt(VNAN)
+DM[1, 6] <- mean(dNATA) / sqrt(VNATA)
+DM[2, 3] <- mean(dTAGN) / sqrt(VTAGN)
+DM[2, 4] <- mean(dTAGTA) / sqrt(VTAGTA)
+DM[2, 5] <- mean(dTAAN) / sqrt(VTAAN)
+DM[2, 6] <- mean(dTAATA) / sqrt(VTAATA)
+DM[3, 4] <- mean(dGNGTA) / sqrt(VGNGTA)
+DM[3, 5] <- mean(dGNAN) / sqrt(VGNAN)
+DM[3, 6] <- mean(dGNATA) / sqrt(VGNATA)
+DM[4, 5] <- mean(dGTAAN) / sqrt(VGTAAN)
+DM[4, 6] <- mean(dGTAATA) / sqrt(VGTAATA)
+DM[5, 6] <- mean(dANATA) / sqrt(VANATA)
+DM
+```
+
+#### The APARCH model with skewed-t distribution is preferable over 2 of the other models, specifically it is statistically better than the APARCH with a normal distribution. The GJR with a skewed-t is statistically better than both the GJR with a normal distribution and the APARCH with a normal distribution. Finally, the GARCH with a skewed-t is statistically better than the GARCH with a normal distribution.
+
+\newpage
+# 5. Correlations among Standardized Residuals{#correlations}
+
+## "Retrieve the standardized returns of the two financial instruments, based on the best model identified in section 4. Use an estimation up to the end of March 2023. Calculate the correlations between the standardized residuals over a rolling window of 62 observations, and over a rolling window of 252 observations. Based on graphical analysis, do the correlations appear constant?"
+
+The best model in both the first and second cases turns out to be the APARCH with a skewed-t distribution.
+
+Below are analyses comparing the correlations with the residuals of the second financial instrument used.
+
+Consider data up to March 2023 and re-estimate the two models:
+
+```{r}
+p_VT = log(window(VTd, end="2023-03-31")) #log-prices
+p_VT = as.vector(p_VT$VT.Adjusted[,1])
+T = length(p_VT)
+r_VT=100*(p_VT[2:T]-p_VT[1:T-1]) #log percentage returns
+yVT = r_VT - mean(r_VT)
+
+specataVT <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)),
+                        mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+                        distribution.model="sstd")
+fitataVT <- ugarchfit(specataVT, r_VT)
+resstataVT <- residuals(fitataVT, standardize=TRUE)
+fitataVT@fit$robust.matcoef
+
+p_EEM = log(window(EEMd, end="2023-03-31")) #log-prices
+p_EEM = as.vector(p_EEM$EEM.Adjusted[,1])
+T = length(p_EEM)
+r_EEM=100*(p_EEM[2:T]-p_EEM[1:T-1]) #log percentage returns
+yEEM = r_EEM - mean(r_EEM)
+
+specataEEM <- ugarchspec(variance.model = list(model="apARCH", garchOrder = c(1, 1)),
+                         mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+                         distribution.model="sstd")
+fitataEEM <- ugarchfit(specataEEM, r_EEM)
+resstataEEM <- residuals(fitataEEM, standardize=TRUE)
+fitataEEM@fit$robust.matcoef
+```
+
+Below are the for loops that calculate the correlations between the standardized residuals of the two financial instruments, reciprocally with windows of 62 and 252 observations.
+
+Thus about a quarter of data and a year of data.
+
+```{r,fig.align='center'}
+lista1=c()
+for (i in 1:(min(length(yEEM),length(yVT))-62)){
+  lista1[i]=cor(as.vector(residuals(fitataVT,standardize=T)[i:(i+61)]),
+                as.vector(residuals(fitataEEM,standardize=T)[(i+1310):(i+1310+61)]))
+}
+plot(lista1)
+
+lista2=c()
+for (i in 1:(min(length(yEEM),length(yVT))-252)){
+  lista2[i]=cor(as.vector(residuals(fitataVT,standardize=T)[i:(i+251)]),
+                as.vector(residuals(fitataEEM,standardize=T)[(i+1310):(i+1310+251)]))
+}
+plot(lista2)
+```
+
+As expected when using the larger window, the trend is smoother.
+
+It may also be interesting to look at the plots between the residuals at different time points.
+
+We will take as an example the window of 62 observations where more differences can be noted.
+
+```{r,fig.align='center'}
+par(mfrow = c(2,2))
+for (i in seq(from = 1, to = 3653, by = 240)) {
+  x <- as.vector(residuals(fitataVT, standardize = TRUE)[i:(i + 61)])
+  y <- as.vector(residuals(fitataEEM, standardize = TRUE)[(i + 1310):(i + 1310 + 61)])
+    start_date <- as.character(time(VTd)[i])
+  end_date <- as.character(time(VTd)[i + 61])
+    titolo <- paste("Correlation:", round(cor(x, y), 2), "\n", start_date, "to", end_date)
+    plot(x, y, main = titolo, cex.main = 0.8)
+}
+```
+
+Below are the residuals compared for the lower correlation of those seen in the graphs above, namely the one that goes from 2014-03-18 to 2014-06-13:
+
+```{r,fig.align='center'}
+par(mfrow=c(1,1))
+library(ggplot2)
+residuals_VT <- residuals(fitataVT, standardize = TRUE)[1441:1502]
+residuals_EEM <- residuals(fitataEEM, standardize = TRUE)[2751:2812]
+data <- data.frame(residuals_VT, residuals_EEM)
+ggplot(data) +
+  geom_path(aes(x = seq_along(residuals_VT), y = residuals_VT), color = "blue") +
+  geom_path(aes(x = seq_along(residuals_EEM), y = residuals_EEM), color = "red") +
+  labs(y = "Residuals", title = "Correlation: 0.62 Period: 2014-03-18 --> 2014-06-13") +
+  ylim(-3, 3) +
+  theme_classic() +
+  theme(axis.title.x = element_blank())
+```
+
+While to conclude, the residuals compared for the highest correlation seen previously, covering the period from May 5, 2011, to August 2, 2011:
+
+```{r,fig.align='center'}
+par(mfrow=c(1,1))
+library(ggplot2)
+residuals_VT <- residuals(fitataVT, standardize = TRUE)[961:1023]
+residuals_EEM <- residuals(fitataEEM, standardize = TRUE)[2271:2333]
+data <- data.frame(residuals_VT, residuals_EEM)
+ggplot(data) +
+  geom_path(aes(x = seq_along(residuals_VT), y = residuals_VT), color = "blue") +
+  geom_path(aes(x = seq_along(residuals_EEM), y = residuals_EEM), color = "red") +
+  labs(y = "Residuals", title = "Correlation: 0.95 Period: 2011-05-05 to 2011-08-02") +
+  ylim(-3, 3) +
+  theme_classic() +
+  theme(axis.title.x = element_blank())
+```
+
+And it is observed that the two series of residuals are practically superimposed.
